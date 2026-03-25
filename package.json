@@ -1,0 +1,23 @@
+{
+  "name": "error-log-service",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Centralized error logging service for Al-Rais platform",
+  "scripts": {
+    "start": "serverless offline",
+    "deploy": "serverless deploy",
+    "remove": "serverless remove",
+    "lint": "eslint . --ext .js",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.529.0",
+    "@aws-sdk/util-dynamodb": "^3.529.0",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "serverless": "^3.38.0",
+    "serverless-esbuild": "^1.52.0",
+    "serverless-offline": "^13.3.0"
+  }
+}

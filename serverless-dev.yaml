@@ -1,0 +1,139 @@
+service: admin-error-log
+frameworkVersion: "3"
+
+custom:
+  esbuild:
+    bundle: true
+    minify: true
+    sourcemap: false
+    target: node20
+    platform: node
+    concurrency: 10
+    exclude:
+      - aws-sdk
+
+  serverless-offline:
+    watch:
+      ignore:
+        - node_modules/**
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: eu-west-1
+  stage: ${opt:stage, 'dev'}
+
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - s3:PutObject
+        - s3:GetObject
+        - s3:ListBucket
+      Resource:
+        - arn:aws:s3:::${aws:accountId}-error-logs-${self:provider.stage}
+        - arn:aws:s3:::${aws:accountId}-error-logs-${self:provider.stage}/*
+    - Effect: Allow
+      Action:
+        - sqs:ReceiveMessage
+        - sqs:DeleteMessage
+        - sqs:GetQueueAttributes
+      Resource:
+        - !GetAtt ErrorLogQueue.Arn
+
+  environment:
+    ERROR_LOGS_BUCKET: ${aws:accountId}-error-logs-${self:provider.stage}
+    STAGE: ${opt:stage, 'dev'}
+    REGION: ${self:provider.region}
+    ERROR_LOG_QUEUE_URL: !Ref ErrorLogQueue
+
+package:
+  excludeDevDependencies: true
+
+functions:
+  logError:
+    handler: handlers/logError.handler
+    timeout: 10
+    events:
+      - http:
+          path: /logError
+          method: post
+          cors:
+            origin: '*'
+            headers:
+              - Content-Type
+              - X-API-KEY
+              - user_type
+              - user_id
+              - Authorization
+            allowCredentials: true
+
+  listErrors:
+    handler: handlers/listErrors.handler
+    timeout: 15
+    layers:
+      - arn:aws:lambda:eu-west-1:${aws:accountId}:layer:authorizerLayer:11
+    events:
+      - http:
+          path: /listErrors
+          method: get
+          cors:
+            origin: '*'
+            headers:
+              - Content-Type
+              - X-API-KEY
+              - user_type
+              - user_id
+              - Authorization
+            allowCredentials: true
+
+  logErrorSqs:
+    handler: handlers/logErrorSqs.handler
+    timeout: 30
+    events:
+      - sqs:
+          arn: !GetAtt ErrorLogQueue.Arn
+          batchSize: 10
+
+  getError:
+    handler: handlers/getError.handler
+    timeout: 10
+    layers:
+      - arn:aws:lambda:eu-west-1:${aws:accountId}:layer:authorizerLayer:11
+    events:
+      - http:
+          path: /getError/{errorId}
+          method: get
+          cors:
+            origin: '*'
+            headers:
+              - Content-Type
+              - X-API-KEY
+              - user_type
+              - user_id
+              - Authorization
+            allowCredentials: true
+
+resources:
+  Resources:
+    ErrorLogQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: error-log-queue-${self:provider.stage}
+        VisibilityTimeout: 60
+        MessageRetentionPeriod: 345600
+
+    ErrorLogsBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${aws:accountId}-error-logs-${self:provider.stage}
+        LifecycleConfiguration:
+          Rules:
+            - Id: MoveToGlacierAfter90Days
+              Status: Enabled
+              Transitions:
+                - StorageClass: GLACIER
+                  TransitionInDays: 90
+
+plugins:
+  - serverless-esbuild
+  - serverless-offline
