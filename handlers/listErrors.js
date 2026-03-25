@@ -9,19 +9,21 @@ export const handler = async (event) => {
   const startTime = Date.now();
   try {
     const qs = event.queryStringParameters || {};
-    const limit = Math.min(parseInt(qs.limit || "20", 10), 100);
+    const limit = Math.min(parseInt(qs.limit || "20", 10), 1000);
     const nextToken = qs.nextToken || null;
     const service = qs.service || null;
-    const date = qs.date || new Date().toISOString().split("T")[0]; // default: today (YYYY-MM-DD)
-    const [year, month, day] = date.split("-");
+    const statusCode = qs.statusCode ? parseInt(qs.statusCode, 10) : null;
+    const from = qs.from || null; // ISO date string
+    const to = qs.to || null; // ISO date string
 
-    // Build S3 prefix: YYYY/MM/DD/ or YYYY/MM/DD/service/
-    let prefix = `${year}/${month}/${day}/`;
-    if (service) {
-      prefix = `${year}/${month}/${day}/${service}/`;
-    }
+    // Parse date range
+    const fromDate = from ? new Date(from) : null;
+    const toDate = to ? new Date(to) : null;
 
-    // List objects in the prefix
+    // Build S3 prefix based on service filter
+    const prefix = service ? "" : ""; // Search all, we'll filter by date range later
+
+    // List objects in the bucket (or with service prefix if specified)
     const listResult = await s3.send(new ListObjectsV2Command({
       Bucket: ERROR_LOGS_BUCKET,
       Prefix: prefix,
@@ -29,10 +31,35 @@ export const handler = async (event) => {
       ContinuationToken: nextToken || undefined,
     }));
 
-    const objects = listResult.Contents || [];
+    let objects = listResult.Contents || [];
+
+    // Filter by service if specified (check if key contains service name)
+    if (service) {
+      objects = objects.filter(obj => obj.Key.includes(`/${service}/`));
+    }
+
+    // Filter by date range if specified
+    if (fromDate || toDate) {
+      objects = objects.filter(obj => {
+        // Extract date from S3 key: YYYY/MM/DD/service/errorId.json
+        const keyParts = obj.Key.split('/');
+        if (keyParts.length >= 3) {
+          const [year, month, day] = keyParts;
+          const objDate = new Date(`${year}-${month}-${day}`);
+          
+          if (fromDate && objDate < fromDate) return false;
+          if (toDate && objDate > toDate) return false;
+          return true;
+        }
+        return false;
+      });
+    }
+
+    // Limit results
+    objects = objects.slice(0, limit);
 
     // Fetch each JSON object
-    const errors = await Promise.all(
+    let errors = await Promise.all(
       objects.map(async (obj) => {
         try {
           const getResult = await s3.send(new GetObjectCommand({
@@ -48,13 +75,20 @@ export const handler = async (event) => {
       })
     );
 
+    // Filter by statusCode if specified
+    if (statusCode) {
+      errors = errors.filter(err => err.statusCode === statusCode);
+    }
+
     return createResponse(200, {
       success: true,
       data: {
         errors,
         count: errors.length,
-        date,
+        from: from || "all",
+        to: to || "all",
         service: service || "all",
+        statusCode: statusCode || "all",
         nextToken: listResult.NextContinuationToken || null,
       },
       duration: Date.now() - startTime,
